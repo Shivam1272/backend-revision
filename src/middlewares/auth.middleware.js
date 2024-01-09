@@ -11,19 +11,21 @@ export const verifyJWT = asyncHandler(async (req, _, next) => {
     if (!token) {
       throw new ApiError(401, "Unauthorized request");
     }
-    const decodedToken = JsonWebToken.verifyJWT(
+    const decodedToken = JsonWebToken.verify(
       token,
       process.env.ACCESS_TOKEN_SECRET
     );
-    const user = await User.findById(decodedToken?._id).select(
+    // console.log(decodedToken);
+    const user = await User.findById(decodedToken?.id).select(
       "-password -refreshToken"
     );
+    // console.log(user);
     if (!user) {
       throw new ApiError(401, "Invalid Access Token");
     }
     req.user = user;
     next();
   } catch (error) {
-    throw new ApiError(401, error?.message || "Invalid Access Token");
+    throw new ApiError(401, error?.message || "Invalid Token");
   }
 });
