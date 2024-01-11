@@ -127,7 +127,7 @@ const logoutUser = asyncHandler(async (req, res) => {
   await User.findByIdAndUpdate(
     req.user._id,
     {
-      $set: { refreshToken: "" },
+      $unset: { refreshToken: 1 },
     },
     {
       new: true,
@@ -137,7 +137,7 @@ const logoutUser = asyncHandler(async (req, res) => {
     .status(200)
     .clearCookie("accessToken", option)
     .clearCookie("refreshToken", option)
-    .json(new ApiResponse(200, null, "Logged Out Successfully"));
+    .json(new ApiResponse(200, {}, "Logged Out Successfully"));
 });
 
 const refreshAccessToken = asyncHandler(async (req, res) => {
@@ -151,8 +151,8 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
       incomingRefreshToken,
       process.env.REFEREH_TOKEN_SECRET
     );
-    console.log(decodedToken);
-    const user = await User.findById(decodedToken._id);
+    console.log("decodedToken", decodedToken);
+    const user = await User.findById(decodedToken.id);
     if (!user) {
       throw new ApiError(401, "Invalid token or user does not exist.");
     }
@@ -209,7 +209,8 @@ const getCurrentUser = asyncHandler(async (req, res) => {
 });
 
 const updateAccountDetail = asyncHandler(async (req, res) => {
-  const { fullName, email } = req.user;
+  const { fullName, email } = req.body;
+  console.log(fullName, email);
   if (!(fullName || email)) {
     throw new ApiError(400, "Atleast one field must be updated");
   }
@@ -334,7 +335,7 @@ const getUserChannelProfile = asyncHandler(async (req, res) => {
   console.log(channel);
 
   if (!channel?.length) {
-    throw new ApiError(404, "Channel dosen't esxist");
+    throw new ApiError(404, "Channel dosen't exist");
   }
   return res
     .status(200)
