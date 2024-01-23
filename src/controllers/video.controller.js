@@ -4,11 +4,77 @@ import { User } from "../models/user.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
-import { uploadOnCloudinary } from "../utils/cloudinary.js";
+import { deleteOnCloudinary, uploadOnCloudinary } from "../utils/cloudinary.js";
 
 const getAllVideos = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, query, sortBy, sortType, userId } = req.query;
+  const {
+    page = 1,
+    limit = 10,
+    query,
+    sortBy = "createdAt",
+    sortType,
+  } = req.query;
+  const userId = req.user.id;
   //TODO: get all videos based on query, sort, pagination
+  if (!isValidObjectId(userId)) {
+    throw new ApiError(404, "Invalid User Id");
+  }
+  try {
+    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    const options = {
+      sort: { [sortBy]: sortType === "asc" ? 1 : -1 },
+      skip,
+      limit: parseInt(limit, 10),
+    };
+
+    let searchQuery = {};
+    if (query) {
+      searchQuery = { title: { $regex: query, $options: "i" } };
+    }
+
+    const aggregateVideos = await Video.aggregate([
+      { $match: searchQuery },
+      {
+        $facet: {
+          metadata: [
+            {
+              $count: "totalDocument",
+            },
+            {
+              $addFields: {
+                pageNumber: page,
+                totalPages: {
+                  $ceil: { $divide: ["$totalDocument", parseInt(limit)] },
+                },
+              },
+            },
+          ],
+          videoData: [
+            { $sort: options.sort },
+            { $skip: options.skip },
+            { $limit: options.limit },
+          ],
+        },
+      },
+    ]);
+    let allVideos;
+    if (aggregateVideos) {
+      allVideos = {
+        meta: aggregateVideos[0].metadata,
+        data: aggregateVideos[0].videoData,
+      };
+    }
+    if (allVideos.meta.length === 0) {
+      throw new ApiError(404, "No video with such title available");
+    }
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(200, allVideos, "Feteched all videos succeddfully...")
+      );
+  } catch (error) {
+    throw new ApiError(500, error?.message || "Unable to retrieve videos....");
+  }
 });
 
 const publishAVideo = asyncHandler(async (req, res) => {
@@ -31,8 +97,14 @@ const publishAVideo = asyncHandler(async (req, res) => {
     const video = await Video.create({
       title,
       description,
-      videoFile: videoC.url,
-      thumbnail: thumbnail.url,
+      videoFile: {
+        public_cloudinary_id: videoC?.public_id,
+        url: videoC?.url,
+      },
+      thumbnail: {
+        public_cloudinary_id: thumbnail?.public_id,
+        url: thumbnail?.url,
+      },
       duration: videoC.duration > 60 ? videoC.duration / 60 : videoC.duration,
       owner: userId,
     });
@@ -49,7 +121,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
 
 const getVideoById = asyncHandler(async (req, res) => {
   const { videoId } = req.params;
-  if (!videoId) {
+  if (!isValidObjectId(videoId)) {
     throw new ApiError(400, "Invalid request");
   }
   try {
@@ -71,16 +143,13 @@ const updateVideo = asyncHandler(async (req, res) => {
   const thumbnailLocalPath = req.file?.path;
   const userId = req.user.id;
   let thumbnail;
-  if (!videoId) {
+  if (!isValidObjectId(videoId)) {
     throw new ApiError(400, "Invalid Request");
   }
   if (!(title || description || thumbnailLocalPath)) {
     throw new ApiError(400, "please provide at least one field to be updated");
   }
   try {
-    if (thumbnailLocalPath) {
-      thumbnail = await uploadOnCloudinary(thumbnailLocalPath);
-    }
     const video = await Video.findById(videoId);
     if (!video) {
       throw new ApiError(404, "No video found with this id");
@@ -92,9 +161,22 @@ const updateVideo = asyncHandler(async (req, res) => {
         "You are not authorized to perform this action on this video"
       );
     }
+    if (thumbnailLocalPath) {
+      thumbnail = await uploadOnCloudinary(thumbnailLocalPath);
+    }
+    if (!thumbnail) {
+      throw new ApiError(
+        500,
+        "Error while uploading thumbnail Please try again..."
+      );
+    }
+    await deleteOnCloudinary(video.thumbnail.public_cloudinary_id, "image");
     video.title = title ? title : video.title;
     video.description = description ? description : video.description;
-    video.thumbnail = thumbnail ? thumbnail.url : video.thumbnail;
+    video.thumbnail = {
+      public_cloudinary_id: thumbnail.public_id,
+      url: thumbnail.url,
+    };
     await video.save();
     return res
       .status(200)
@@ -108,7 +190,7 @@ const deleteVideo = asyncHandler(async (req, res) => {
   const { videoId } = req.params;
   const userId = req.user.id;
   //TODO: delete video
-  if (!videoId) {
+  if (!isValidObjectId(videoId)) {
     throw new ApiError(400, "Invalid request");
   }
   try {
@@ -119,6 +201,8 @@ const deleteVideo = asyncHandler(async (req, res) => {
     if (video.owner.toString() !== userId.toString()) {
       throw new ApiError(401, "User is not the owner of this video!");
     }
+    await deleteOnCloudinary(video.videoFile.public_cloudinary_id, "video");
+    await deleteOnCloudinary(video.thumbnail.public_cloudinary_id, "image");
     await Video.findByIdAndDelete(videoId);
     return res
       .status(200)
@@ -131,7 +215,7 @@ const deleteVideo = asyncHandler(async (req, res) => {
 const togglePublishStatus = asyncHandler(async (req, res) => {
   const { videoId } = req.params;
   const userId = req.user.id;
-  if (!videoId) {
+  if (!isValidObjectId(videoId)) {
     throw new ApiError(400, "Invalid Request");
   }
   try {
